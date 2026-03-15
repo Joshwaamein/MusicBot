@@ -325,6 +325,14 @@ class MusicBot(discord.Client):
                 self.config.ytdlp_oauth2_url, download=False, process=True
             )
 
+        # Load slash command cogs
+        try:
+            from .cogs.music import MusicCog, setup as music_setup
+            await music_setup(self)
+            log.info("Loaded slash command cogs.")
+        except Exception:
+            log.exception("Failed to load slash command cogs.")
+
         log.info("Initialized, now connecting to discord.")
         # this creates an output similar to a progress indicator.
         muffle_discord_console_log()
@@ -2411,6 +2419,13 @@ class MusicBot(discord.Client):
         """
         await self.update_now_playing_status()
         await self._auto_join_channels()
+
+        # Sync slash commands with Discord
+        try:
+            synced = await self.tree.sync()
+            log.info("Synced %d slash commands with Discord.", len(synced))
+        except Exception:
+            log.exception("Failed to sync slash commands.")
 
     async def _on_ready_sanity_checks(self) -> None:
         """
