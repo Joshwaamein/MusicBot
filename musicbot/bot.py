@@ -2422,12 +2422,13 @@ class MusicBot(discord.Client):
         await self.update_now_playing_status()
         await self._auto_join_channels()
 
-        # Sync slash commands with Discord
-        try:
-            synced = await self.tree.sync()
-            log.info("Synced %d slash commands with Discord.", len(synced))
-        except Exception:
-            log.exception("Failed to sync slash commands.")
+        # Sync slash commands with Discord (only on first ready to avoid rate limits)
+        if self.on_ready_count <= 1:
+            try:
+                synced = await self.tree.sync()
+                log.info("Synced %d slash commands with Discord.", len(synced))
+            except Exception:
+                log.exception("Failed to sync slash commands.")
 
     async def _on_ready_sanity_checks(self) -> None:
         """
