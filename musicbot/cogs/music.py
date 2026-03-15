@@ -15,14 +15,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class MusicCommands(app_commands.Group):
-    """Core music slash commands for MusicBot."""
-
-    pass
-
-
-class MusicCog(discord.ext.commands.Cog):
-    """Cog that registers slash commands for MusicBot's core music functionality."""
+class MusicCog:
+    """Registers slash commands for MusicBot's core music functionality."""
 
     def __init__(self, bot: "MusicBot") -> None:
         self.bot = bot
