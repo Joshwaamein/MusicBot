@@ -327,7 +327,7 @@ class MusicBot(discord.Client):
 
         # Load slash command cogs
         try:
-            from .cogs.music import MusicCog, setup as music_setup
+            from .cogs.music import setup as music_setup
             await music_setup(self)
             log.info("Loaded slash command cogs.")
         except Exception:
