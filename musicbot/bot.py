@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, DefaultDict, Dict, List, Optional, Set, U
 import aiohttp
 import certifi  # type: ignore[import-untyped, unused-ignore]
 import discord
+from discord import app_commands
 import yt_dlp as youtube_dl  # type: ignore[import-untyped]
 
 from . import downloader, exceptions
@@ -201,6 +202,7 @@ class MusicBot(discord.Client):
         intents.typing = False
         intents.presences = False
         super().__init__(intents=intents)
+        self.tree = app_commands.CommandTree(self)
 
     def create_task(
         self,
