@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, DefaultDict, Dict, List, Optional, Set, U
 import aiohttp
 import certifi  # type: ignore[import-untyped, unused-ignore]
 import discord
+from discord import app_commands
 import yt_dlp as youtube_dl  # type: ignore[import-untyped]
 
 from . import downloader, exceptions
@@ -201,6 +202,7 @@ class MusicBot(discord.Client):
         intents.typing = False
         intents.presences = False
         super().__init__(intents=intents)
+        self.tree = app_commands.CommandTree(self)
 
     def create_task(
         self,
@@ -2420,12 +2422,13 @@ class MusicBot(discord.Client):
         await self.update_now_playing_status()
         await self._auto_join_channels()
 
-        # Sync slash commands with Discord
-        try:
-            synced = await self.tree.sync()
-            log.info("Synced %d slash commands with Discord.", len(synced))
-        except Exception:
-            log.exception("Failed to sync slash commands.")
+        # Sync slash commands with Discord (only on first ready to avoid rate limits)
+        if self.on_ready_count <= 1:
+            try:
+                synced = await self.tree.sync()
+                log.info("Synced %d slash commands with Discord.", len(synced))
+            except Exception:
+                log.exception("Failed to sync slash commands.")
 
     async def _on_ready_sanity_checks(self) -> None:
         """

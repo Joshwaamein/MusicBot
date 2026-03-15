@@ -1,11 +1,17 @@
 """
-Slash command cog for core music commands.
+Slash command cog for MusicBot.
 These wrap the existing MusicBot cmd_* methods to provide Discord slash command support.
+
+Key design decisions:
+- Commands that return Response objects: we extract the content and send via interaction.
+- Commands that send directly to channel (np, shuffle): we let them do their thing
+  and just acknowledge the interaction ephemerally.
+- Commands needing a discord.Message: we pass a FakeMessage with the minimum attributes.
+- All commands are guild_only and include permission checks.
 """
 
 import logging
-import math
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Union
 
 import discord
 from discord import app_commands
@@ -16,263 +22,827 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+class _FakeMessage:
+    """
+    Lightweight stand-in for discord.Message used when slash commands call
+    cmd_* methods that expect a Message parameter.
+
+    safe_delete_message / safe_edit_message will fail gracefully on this
+    since it's not a real message. SkipState stores message IDs which works fine.
+    """
+
+    def __init__(self, interaction: discord.Interaction) -> None:
+        self.id = interaction.id
+        self.author = interaction.user
+        self.channel = interaction.channel
+        self.guild = interaction.guild
+        self.content = ""
+        self.mentions = []
+        self.raw_mentions = []
+        self.raw_channel_mentions = []
+
+    async def delete(self, *, delay: Optional[float] = None) -> None:
+        """No-op: can't delete an interaction."""
+        pass
+
+    async def add_reaction(self, emoji: str) -> None:
+        """No-op: can't react to an interaction."""
+        pass
+
+
+async def _send_response(
+    interaction: discord.Interaction,
+    bot: "MusicBot",
+    response: object,
+    command_name: str = "",
+) -> None:
+    """
+    Send a cmd_* Response object back through the interaction.
+    Handles both embed and text content, respects the bot's embed config.
+    """
+    from musicbot.constructs import Response
+
+    if not response or not isinstance(response, Response):
+        await interaction.followup.send("✅ Done.", ephemeral=True)
+        return
+
+    content = response.content
+    if isinstance(content, discord.Embed):
+        await interaction.followup.send(embed=content)
+    elif bot.config.embeds:
+        embed = bot._gen_embed()
+        embed.title = command_name or "MusicBot"
+        embed.description = str(content)
+        await interaction.followup.send(embed=embed)
+    else:
+        await interaction.followup.send(str(content))
+
+
+def _check_perms(
+    bot: "MusicBot",
+    interaction: discord.Interaction,
+    perm_name: str,
+) -> bool:
+    """
+    Check if the interaction user has a specific permission.
+    Returns True if allowed, False otherwise.
+    """
+    user = interaction.user
+    perms = bot.permissions.for_user(user)
+    return bool(getattr(perms, perm_name, True))
+
+
 async def setup(bot: "MusicBot") -> None:
     """Register slash commands on the bot's command tree."""
 
-    @bot.tree.command(name="play", description="Play a song from YouTube, Spotify, or search by name")
+    # ─── /play ─────────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="play",
+        description="Play a song from YouTube, Spotify, or search by name",
+    )
     @app_commands.describe(song="A URL or search query for the song to play")
+    @app_commands.guild_only()
     async def slash_play(interaction: discord.Interaction, song: str) -> None:
-        if not interaction.guild or not isinstance(interaction.user, discord.Member):
+        if not isinstance(interaction.user, discord.Member):
             return
         if not interaction.user.voice or not interaction.user.voice.channel:
-            await interaction.response.send_message("You need to be in a voice channel.", ephemeral=True)
+            await interaction.response.send_message(
+                "You need to be in a voice channel.", ephemeral=True
+            )
             return
+
         await interaction.response.defer()
         try:
             guild = interaction.guild
             author = interaction.user
             channel = interaction.channel
             permissions = bot.permissions.for_user(author)
-            _player = bot.get_player_in(guild)
-            if not _player:
-                _player = await bot.get_player(author.voice.channel, create=True)
-            response = await bot._cmd_play(
-                message=None, _player=_player, channel=channel, guild=guild,
-                author=author, permissions=permissions, leftover_args=[], song_url=song, head=False,
-            )
-            if response and response.content:
-                c = response.content
-                if isinstance(c, discord.Embed):
-                    await interaction.followup.send(embed=c)
-                else:
-                    await interaction.followup.send(str(c))
-            else:
-                await interaction.followup.send("🎶 Added to queue!")
-        except Exception as e:
-            await interaction.followup.send(f"❌ {getattr(e, 'message', str(e))}", ephemeral=True)
+            fake_msg = _FakeMessage(interaction)
 
-    @bot.tree.command(name="playnext", description="Add a song to play next in the queue")
+            _player = bot.get_player_in(guild) if guild else None
+            if not _player and guild and author.voice:
+                _player = await bot.get_player(author.voice.channel, create=True)
+
+            if not _player:
+                await interaction.followup.send(
+                    "Could not join a voice channel.", ephemeral=True
+                )
+                return
+
+            response = await bot._cmd_play(
+                message=fake_msg,
+                _player=_player,
+                channel=channel,
+                guild=guild,
+                author=author,
+                permissions=permissions,
+                leftover_args=[],
+                song_url=song,
+                head=False,
+            )
+            await _send_response(interaction, bot, response, "play")
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+
+    # ─── /playnext ─────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="playnext",
+        description="Add a song to play next in the queue",
+    )
     @app_commands.describe(song="A URL or search query")
+    @app_commands.guild_only()
     async def slash_playnext(interaction: discord.Interaction, song: str) -> None:
-        if not interaction.guild or not isinstance(interaction.user, discord.Member):
+        if not isinstance(interaction.user, discord.Member):
             return
         if not interaction.user.voice or not interaction.user.voice.channel:
-            await interaction.response.send_message("You need to be in a voice channel.", ephemeral=True)
+            await interaction.response.send_message(
+                "You need to be in a voice channel.", ephemeral=True
+            )
             return
+
+        await interaction.response.defer()
+        try:
+            guild = interaction.guild
+            author = interaction.user
+            channel = interaction.channel
+            permissions = bot.permissions.for_user(author)
+            fake_msg = _FakeMessage(interaction)
+
+            _player = bot.get_player_in(guild) if guild else None
+            if not _player and guild and author.voice:
+                _player = await bot.get_player(author.voice.channel, create=True)
+
+            if not _player:
+                await interaction.followup.send(
+                    "Could not join a voice channel.", ephemeral=True
+                )
+                return
+
+            response = await bot._cmd_play(
+                message=fake_msg,
+                _player=_player,
+                channel=channel,
+                guild=guild,
+                author=author,
+                permissions=permissions,
+                leftover_args=[],
+                song_url=song,
+                head=True,
+            )
+            await _send_response(interaction, bot, response, "playnext")
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+
+    # ─── /playnow ──────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="playnow",
+        description="Play a song immediately, skipping the current one",
+    )
+    @app_commands.describe(song="A URL or search query")
+    @app_commands.guild_only()
+    async def slash_playnow(interaction: discord.Interaction, song: str) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        if not interaction.user.voice or not interaction.user.voice.channel:
+            await interaction.response.send_message(
+                "You need to be in a voice channel.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+        try:
+            guild = interaction.guild
+            author = interaction.user
+            channel = interaction.channel
+            permissions = bot.permissions.for_user(author)
+            fake_msg = _FakeMessage(interaction)
+
+            _player = bot.get_player_in(guild) if guild else None
+            if not _player and guild and author.voice:
+                _player = await bot.get_player(author.voice.channel, create=True)
+
+            if not _player:
+                await interaction.followup.send(
+                    "Could not join a voice channel.", ephemeral=True
+                )
+                return
+
+            response = await bot.cmd_playnow(
+                message=fake_msg,
+                _player=_player,
+                channel=channel,
+                guild=guild,
+                author=author,
+                permissions=permissions,
+                leftover_args=[],
+                song_url=song,
+            )
+            await _send_response(interaction, bot, response, "playnow")
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+
+    # ─── /shuffleplay ─────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="shuffleplay",
+        description="Play a song and shuffle it into a random queue position",
+    )
+    @app_commands.describe(song="A URL or search query")
+    @app_commands.guild_only()
+    async def slash_shuffleplay(interaction: discord.Interaction, song: str) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        if not interaction.user.voice or not interaction.user.voice.channel:
+            await interaction.response.send_message(
+                "You need to be in a voice channel.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+        try:
+            guild = interaction.guild
+            author = interaction.user
+            channel = interaction.channel
+            permissions = bot.permissions.for_user(author)
+            fake_msg = _FakeMessage(interaction)
+
+            _player = bot.get_player_in(guild) if guild else None
+            if not _player and guild and author.voice:
+                _player = await bot.get_player(author.voice.channel, create=True)
+
+            if not _player:
+                await interaction.followup.send(
+                    "Could not join a voice channel.", ephemeral=True
+                )
+                return
+
+            response = await bot.cmd_shuffleplay(
+                message=fake_msg,
+                _player=_player,
+                channel=channel,
+                guild=guild,
+                author=author,
+                permissions=permissions,
+                leftover_args=[],
+                song_url=song,
+            )
+            await _send_response(interaction, bot, response, "shuffleplay")
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+
+    # ─── /skip ─────────────────────────────────────────────────────────────
+
+    @bot.tree.command(name="skip", description="Skip the current song")
+    @app_commands.describe(
+        force="Force skip (owner/instaskip only)"
+    )
+    @app_commands.guild_only()
+    async def slash_skip(
+        interaction: discord.Interaction, force: bool = False
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+
         await interaction.response.defer()
         try:
             guild = interaction.guild
             author = interaction.user
             permissions = bot.permissions.for_user(author)
-            _player = bot.get_player_in(guild)
-            if not _player:
-                _player = await bot.get_player(author.voice.channel, create=True)
-            response = await bot._cmd_play(
-                message=None, _player=_player, channel=interaction.channel, guild=guild,
-                author=author, permissions=permissions, leftover_args=[], song_url=song, head=True,
-            )
-            if response and response.content:
-                c = response.content
-                await interaction.followup.send(str(c) if not isinstance(c, discord.Embed) else "", embed=c if isinstance(c, discord.Embed) else discord.utils.MISSING)
-            else:
-                await interaction.followup.send("🎶 Added to play next!")
-        except Exception as e:
-            await interaction.followup.send(f"❌ {getattr(e, 'message', str(e))}", ephemeral=True)
+            fake_msg = _FakeMessage(interaction)
+            player = bot.get_player_in(guild)
 
-    @bot.tree.command(name="skip", description="Skip the current song")
-    @app_commands.describe(force="Force skip (owner/instaskip only)")
-    async def slash_skip(interaction: discord.Interaction, force: bool = False) -> None:
-        if not interaction.guild:
-            return
-        player = bot.get_player_in(interaction.guild)
-        if not player or not player.current_entry:
-            await interaction.response.send_message("Nothing is playing.", ephemeral=True)
-            return
-        entry = player.current_entry
-        if player.repeatsong:
-            player.repeatsong = False
-        player.skip()
-        await interaction.response.send_message(f"⏭️ Skipped **{entry.title}**")
+            if not player:
+                await interaction.followup.send(
+                    "Nothing is playing.", ephemeral=True
+                )
+                return
+
+            voice_channel = guild.me.voice.channel if guild.me.voice else None
+
+            response = await bot.cmd_skip(
+                guild=guild,
+                player=player,
+                author=author,
+                message=fake_msg,
+                permissions=permissions,
+                voice_channel=voice_channel,
+                param="force" if force else "",
+            )
+            await _send_response(interaction, bot, response, "skip")
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+
+    # ─── /pause ────────────────────────────────────────────────────────────
 
     @bot.tree.command(name="pause", description="Pause the current song")
+    @app_commands.guild_only()
     async def slash_pause(interaction: discord.Interaction) -> None:
-        if not interaction.guild:
+        if not isinstance(interaction.user, discord.Member):
             return
-        player = bot.get_player_in(interaction.guild)
-        if not player or not player.is_playing:
-            await interaction.response.send_message("Nothing is playing.", ephemeral=True)
-            return
-        player.pause()
-        await interaction.response.send_message(f"⏸️ Paused")
 
-    @bot.tree.command(name="resume", description="Resume playback")
-    async def slash_resume(interaction: discord.Interaction) -> None:
-        if not interaction.guild:
-            return
-        player = bot.get_player_in(interaction.guild)
-        if not player or not player.is_paused:
-            await interaction.response.send_message("Nothing is paused.", ephemeral=True)
-            return
-        player.resume()
-        await interaction.response.send_message(f"▶️ Resumed")
-
-    @bot.tree.command(name="queue", description="Show the current song queue")
-    @app_commands.describe(page="Page number")
-    async def slash_queue(interaction: discord.Interaction, page: int = 1) -> None:
-        if not interaction.guild:
-            return
-        player = bot.get_player_in(interaction.guild)
-        if not player or not player.playlist.entries:
-            await interaction.response.send_message("The queue is empty.", ephemeral=True)
-            return
-        from musicbot.utils import format_song_duration
-        entries = list(player.playlist.entries)
-        total = len(entries)
-        per_page = 10
-        pages = math.ceil(total / per_page)
-        page = max(1, min(page, pages))
-        start = (page - 1) * per_page
-        desc = ""
-        if player.current_entry:
-            prog = format_song_duration(player.progress)
-            dur = format_song_duration(player.current_entry.duration_td) if player.current_entry.duration else "?"
-            desc += f"🎵 **Now Playing:** {player.current_entry.title}\n`[{prog}/{dur}]`\n\n"
-        desc += f"**Queue ({total} songs):**\n"
-        for idx, item in enumerate(entries[start:start+per_page], start + 1):
-            t = item.title[:50] + "..." if len(item.title) > 50 else item.title
-            desc += f"`{idx}.` {t}\n"
-        if pages > 1:
-            desc += f"\n*Page {page}/{pages}*"
-        embed = discord.Embed(title="🎶 Song Queue", description=desc, color=discord.Color.blurple())
-        await interaction.response.send_message(embed=embed)
-
-    @bot.tree.command(name="np", description="Show the currently playing song")
-    async def slash_np(interaction: discord.Interaction) -> None:
-        if not interaction.guild:
-            return
-        player = bot.get_player_in(interaction.guild)
-        if not player or not player.current_entry:
-            await interaction.response.send_message("Nothing is playing.", ephemeral=True)
-            return
-        from musicbot.utils import format_song_duration
-        entry = player.current_entry
-        prog = format_song_duration(player.progress)
-        dur = format_song_duration(entry.duration_td) if entry.duration else "Live"
-        pct = player.progress / entry.duration_td.total_seconds() if entry.duration and entry.duration_td.total_seconds() > 0 else 0
-        filled = int(20 * pct)
-        bar = "▓" * filled + "░" * (20 - filled)
-        embed = discord.Embed(title="🎵 Now Playing", description=f"**{entry.title}**", color=discord.Color.green())
-        if entry.author:
-            embed.add_field(name="Added by", value=entry.author.name, inline=True)
-        embed.add_field(name="Progress", value=f"`{bar}` {prog}/{dur}", inline=False)
-        if entry.thumbnail_url:
-            embed.set_thumbnail(url=entry.thumbnail_url)
-        await interaction.response.send_message(embed=embed)
-
-    @bot.tree.command(name="volume", description="Set or show the playback volume")
-    @app_commands.describe(level="Volume level (1-100)")
-    async def slash_volume(interaction: discord.Interaction, level: Optional[int] = None) -> None:
-        if not interaction.guild:
-            return
-        player = bot.get_player_in(interaction.guild)
-        if not player:
-            await interaction.response.send_message("Not connected.", ephemeral=True)
-            return
-        if level is None:
-            await interaction.response.send_message(f"🔊 Volume: **{int(player.volume*100)}%**")
-            return
-        if not 1 <= level <= 100:
-            await interaction.response.send_message("Volume must be 1-100.", ephemeral=True)
-            return
-        old = int(player.volume * 100)
-        player.volume = level / 100.0
-        await interaction.response.send_message(f"🔊 Volume: **{old}%** → **{level}%**")
-
-    @bot.tree.command(name="summon", description="Summon the bot to your voice channel")
-    async def slash_summon(interaction: discord.Interaction) -> None:
-        if not interaction.guild or not isinstance(interaction.user, discord.Member):
-            return
-        if not interaction.user.voice or not interaction.user.voice.channel:
-            await interaction.response.send_message("Join a voice channel first.", ephemeral=True)
-            return
         await interaction.response.defer()
         try:
             player = bot.get_player_in(interaction.guild)
-            if player and player.voice_client:
-                await interaction.guild.change_voice_state(channel=interaction.user.voice.channel, self_deaf=bot.config.self_deafen)
-            else:
-                await bot.get_player(interaction.user.voice.channel, create=True)
-            await interaction.followup.send(f"✅ Connected to **{interaction.user.voice.channel.name}**")
+            if not player:
+                await interaction.followup.send(
+                    "Nothing is playing.", ephemeral=True
+                )
+                return
+
+            response = await bot.cmd_pause(player)
+            await _send_response(interaction, bot, response, "pause")
+
         except Exception as e:
-            await interaction.followup.send(f"❌ {getattr(e, 'message', str(e))}", ephemeral=True)
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+
+    # ─── /resume ───────────────────────────────────────────────────────────
+
+    @bot.tree.command(name="resume", description="Resume playback")
+    @app_commands.guild_only()
+    async def slash_resume(interaction: discord.Interaction) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+
+        await interaction.response.defer()
+        try:
+            player = bot.get_player_in(interaction.guild)
+            if not player:
+                await interaction.followup.send(
+                    "Nothing is playing.", ephemeral=True
+                )
+                return
+
+            response = await bot.cmd_resume(player)
+            await _send_response(interaction, bot, response, "resume")
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+
+    # ─── /queue ────────────────────────────────────────────────────────────
+
+    @bot.tree.command(name="queue", description="Show the current song queue")
+    @app_commands.describe(page="Page number (for long queues)")
+    @app_commands.guild_only()
+    async def slash_queue(
+        interaction: discord.Interaction, page: int = 1
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+
+        await interaction.response.defer()
+        try:
+            guild = interaction.guild
+            player = bot.get_player_in(guild)
+            if not player:
+                await interaction.followup.send(
+                    "Nothing is playing and the queue is empty.", ephemeral=True
+                )
+                return
+
+            # cmd_queue sends messages to channel itself, but we need to
+            # capture the Response and send it via the interaction instead.
+            # We pass a dummy channel that won't actually be used for the Response path.
+            response = await bot.cmd_queue(
+                guild=guild,
+                channel=interaction.channel,
+                player=player,
+                page=str(page),
+            )
+            await _send_response(interaction, bot, response, "queue")
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+
+    # ─── /np ───────────────────────────────────────────────────────────────
+
+    @bot.tree.command(name="np", description="Show the currently playing song")
+    @app_commands.guild_only()
+    async def slash_np(interaction: discord.Interaction) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+
+        await interaction.response.defer()
+        try:
+            guild = interaction.guild
+            player = bot.get_player_in(guild)
+            if not player:
+                await interaction.followup.send(
+                    "Nothing is playing.", ephemeral=True
+                )
+                return
+
+            # cmd_np sends an embed to the channel AND returns a Response.
+            # We call it with the interaction channel so the embed goes there,
+            # then acknowledge the interaction ephemerally to avoid double-posting.
+            response = await bot.cmd_np(
+                player=player,
+                channel=interaction.channel,
+                guild=guild,
+            )
+            # cmd_np sends the embed to channel itself via safe_send_message.
+            # The Response it returns has the same content, so we just acknowledge.
+            if response and response.content:
+                # It returned content that wasn't sent to channel — send it
+                await _send_response(interaction, bot, response, "np")
+            else:
+                await interaction.followup.send(
+                    "🎵 Now playing info sent above.", ephemeral=True
+                )
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+
+    # ─── /volume ───────────────────────────────────────────────────────────
+
+    @bot.tree.command(name="volume", description="Set or show the playback volume")
+    @app_commands.describe(level="Volume level (1-100), or +/- for relative change")
+    @app_commands.guild_only()
+    async def slash_volume(
+        interaction: discord.Interaction, level: Optional[str] = None
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+
+        await interaction.response.defer()
+        try:
+            player = bot.get_player_in(interaction.guild)
+            if not player:
+                await interaction.followup.send(
+                    "Nothing is playing.", ephemeral=True
+                )
+                return
+
+            # Pass empty string if no level given (matches cmd_volume default)
+            response = await bot.cmd_volume(
+                player=player,
+                new_volume=level if level is not None else "",
+            )
+            await _send_response(interaction, bot, response, "volume")
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+
+    # ─── /summon ───────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="summon", description="Summon the bot to your voice channel"
+    )
+    @app_commands.guild_only()
+    async def slash_summon(interaction: discord.Interaction) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        if not interaction.user.voice or not interaction.user.voice.channel:
+            await interaction.response.send_message(
+                "You need to be in a voice channel.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+        try:
+            fake_msg = _FakeMessage(interaction)
+            response = await bot.cmd_summon(
+                guild=interaction.guild,
+                author=interaction.user,
+                message=fake_msg,
+            )
+            await _send_response(interaction, bot, response, "summon")
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+
+    # ─── /disconnect ───────────────────────────────────────────────────────
 
     @bot.tree.command(name="disconnect", description="Disconnect from voice")
+    @app_commands.guild_only()
     async def slash_disconnect(interaction: discord.Interaction) -> None:
-        if not interaction.guild:
+        if not isinstance(interaction.user, discord.Member):
             return
-        player = bot.get_player_in(interaction.guild)
-        if not player:
-            await interaction.response.send_message("Not connected.", ephemeral=True)
-            return
-        await bot.disconnect_voice_client(interaction.guild)
-        await interaction.response.send_message("👋 Disconnected.")
+
+        await interaction.response.defer()
+        try:
+            response = await bot.cmd_disconnect(guild=interaction.guild)
+            await _send_response(interaction, bot, response, "disconnect")
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+
+    # ─── /shuffle ──────────────────────────────────────────────────────────
 
     @bot.tree.command(name="shuffle", description="Shuffle the queue")
+    @app_commands.guild_only()
     async def slash_shuffle(interaction: discord.Interaction) -> None:
-        if not interaction.guild:
+        if not isinstance(interaction.user, discord.Member):
             return
-        player = bot.get_player_in(interaction.guild)
-        if not player or not player.playlist.entries:
-            await interaction.response.send_message("Nothing to shuffle.", ephemeral=True)
-            return
-        player.playlist.shuffle()
-        await interaction.response.send_message("🔀 Queue shuffled!")
+
+        await interaction.response.defer()
+        try:
+            guild = interaction.guild
+            player = bot.get_player_in(guild)
+            if not player:
+                await interaction.followup.send(
+                    "Nothing is queued.", ephemeral=True
+                )
+                return
+
+            # cmd_shuffle does a card animation in the channel, then returns Response.
+            # We let the animation happen in the channel and send the final response
+            # via the interaction.
+            response = await bot.cmd_shuffle(
+                channel=interaction.channel,
+                player=player,
+            )
+            await _send_response(interaction, bot, response, "shuffle")
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+
+    # ─── /clear ────────────────────────────────────────────────────────────
 
     @bot.tree.command(name="clear", description="Clear the queue")
+    @app_commands.guild_only()
     async def slash_clear(interaction: discord.Interaction) -> None:
-        if not interaction.guild:
+        if not isinstance(interaction.user, discord.Member):
             return
-        player = bot.get_player_in(interaction.guild)
-        if not player:
-            await interaction.response.send_message("Not connected.", ephemeral=True)
-            return
-        player.playlist.clear()
-        await interaction.response.send_message("🗑️ Queue cleared!")
+
+        await interaction.response.defer()
+        try:
+            player = bot.get_player_in(interaction.guild)
+            if not player:
+                await interaction.followup.send(
+                    "Nothing to clear.", ephemeral=True
+                )
+                return
+
+            response = await bot.cmd_clear(player=player)
+            await _send_response(interaction, bot, response, "clear")
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+
+    # ─── /repeat ───────────────────────────────────────────────────────────
 
     @bot.tree.command(name="repeat", description="Toggle repeat mode")
-    @app_commands.describe(mode="Repeat mode")
-    @app_commands.choices(mode=[
-        app_commands.Choice(name="Song", value="song"),
-        app_commands.Choice(name="Playlist", value="playlist"),
-        app_commands.Choice(name="Off", value="off"),
-    ])
-    async def slash_repeat(interaction: discord.Interaction, mode: str = "song") -> None:
-        if not interaction.guild:
+    @app_commands.describe(
+        mode="Repeat mode: all (loop queue), song (loop current), on, off"
+    )
+    @app_commands.choices(
+        mode=[
+            app_commands.Choice(name="Song (loop current)", value="song"),
+            app_commands.Choice(name="All (loop queue)", value="all"),
+            app_commands.Choice(name="On", value="on"),
+            app_commands.Choice(name="Off", value="off"),
+        ]
+    )
+    @app_commands.guild_only()
+    async def slash_repeat(
+        interaction: discord.Interaction,
+        mode: Optional[app_commands.Choice[str]] = None,
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
             return
-        player = bot.get_player_in(interaction.guild)
-        if not player:
-            await interaction.response.send_message("Not connected.", ephemeral=True)
+
+        await interaction.response.defer()
+        try:
+            guild = interaction.guild
+            player = bot.get_player_in(guild)
+            if not player:
+                await interaction.followup.send(
+                    "Nothing is playing.", ephemeral=True
+                )
+                return
+
+            option = mode.value if mode else ""
+            response = await bot.cmd_repeat(guild=guild, option=option)
+            await _send_response(interaction, bot, response, "repeat")
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+
+    # ─── /search ───────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="search",
+        description="Search for a song and choose from results",
+    )
+    @app_commands.describe(
+        query="Search query",
+        service="Service to search (default: youtube)",
+    )
+    @app_commands.choices(
+        service=[
+            app_commands.Choice(name="YouTube", value="youtube"),
+            app_commands.Choice(name="SoundCloud", value="soundcloud"),
+        ]
+    )
+    @app_commands.guild_only()
+    async def slash_search(
+        interaction: discord.Interaction,
+        query: str,
+        service: Optional[app_commands.Choice[str]] = None,
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
             return
-        if mode == "song":
-            player.repeatsong = not player.repeatsong
-            player.loopqueue = False
-            await interaction.response.send_message(f"🔂 Song repeat **{'enabled' if player.repeatsong else 'disabled'}**")
-        elif mode == "playlist":
-            player.loopqueue = not player.loopqueue
-            player.repeatsong = False
-            await interaction.response.send_message(f"🔁 Playlist repeat **{'enabled' if player.loopqueue else 'disabled'}**")
-        else:
-            player.repeatsong = False
-            player.loopqueue = False
-            await interaction.response.send_message("⏹️ Repeat disabled")
+        if not interaction.user.voice or not interaction.user.voice.channel:
+            await interaction.response.send_message(
+                "You need to be in a voice channel.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+        try:
+            guild = interaction.guild
+            author = interaction.user
+            channel = interaction.channel
+            permissions = bot.permissions.for_user(author)
+            fake_msg = _FakeMessage(interaction)
+
+            _player = bot.get_player_in(guild) if guild else None
+            if not _player and guild and author.voice:
+                _player = await bot.get_player(author.voice.channel, create=True)
+
+            if not _player:
+                await interaction.followup.send(
+                    "Could not join a voice channel.", ephemeral=True
+                )
+                return
+
+            svc = service.value if service else "youtube"
+
+            response = await bot.cmd_search(
+                message=fake_msg,
+                player=_player,
+                channel=channel,
+                guild=guild,
+                author=author,
+                permissions=permissions,
+                leftover_args=[svc, query],
+            )
+            await _send_response(interaction, bot, response, "search")
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+
+    # ─── /seek ─────────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="seek", description="Seek to a position in the current song"
+    )
+    @app_commands.describe(time="Time to seek to (e.g. 1:30, 90, +30, -15)")
+    @app_commands.guild_only()
+    async def slash_seek(interaction: discord.Interaction, time: str) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+
+        await interaction.response.defer()
+        try:
+            guild = interaction.guild
+            _player = bot.get_player_in(guild)
+            if not _player:
+                await interaction.followup.send(
+                    "Nothing is playing.", ephemeral=True
+                )
+                return
+
+            response = await bot.cmd_seek(
+                guild=guild,
+                _player=_player,
+                leftover_args=[],
+                seek_time=time,
+            )
+            await _send_response(interaction, bot, response, "seek")
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+
+    # ─── /speed ────────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="speed", description="Set the playback speed"
+    )
+    @app_commands.describe(rate="Speed multiplier (e.g. 0.5, 1.0, 1.5, 2.0)")
+    @app_commands.guild_only()
+    async def slash_speed(interaction: discord.Interaction, rate: float) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+
+        await interaction.response.defer()
+        try:
+            guild = interaction.guild
+            player = bot.get_player_in(guild)
+            if not player:
+                await interaction.followup.send(
+                    "Nothing is playing.", ephemeral=True
+                )
+                return
+
+            response = await bot.cmd_speed(
+                guild=guild,
+                player=player,
+                new_speed=str(rate),
+            )
+            await _send_response(interaction, bot, response, "speed")
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+
+    # ─── /stream ───────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="stream", description="Stream from a URL (no pre-download)"
+    )
+    @app_commands.describe(url="URL to stream")
+    @app_commands.guild_only()
+    async def slash_stream(interaction: discord.Interaction, url: str) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        if not interaction.user.voice or not interaction.user.voice.channel:
+            await interaction.response.send_message(
+                "You need to be in a voice channel.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+        try:
+            guild = interaction.guild
+            author = interaction.user
+            channel = interaction.channel
+            permissions = bot.permissions.for_user(author)
+            fake_msg = _FakeMessage(interaction)
+
+            _player = bot.get_player_in(guild) if guild else None
+            if not _player and guild and author.voice:
+                _player = await bot.get_player(author.voice.channel, create=True)
+
+            if not _player:
+                await interaction.followup.send(
+                    "Could not join a voice channel.", ephemeral=True
+                )
+                return
+
+            response = await bot.cmd_stream(
+                message=fake_msg,
+                _player=_player,
+                channel=channel,
+                guild=guild,
+                author=author,
+                permissions=permissions,
+                song_url=url,
+            )
+            await _send_response(interaction, bot, response, "stream")
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+
+    # ─── /help ─────────────────────────────────────────────────────────────
 
     @bot.tree.command(name="help", description="Show available commands")
+    @app_commands.guild_only()
     async def slash_help(interaction: discord.Interaction) -> None:
-        embed = discord.Embed(title="🎵 Jeeves — Commands", color=discord.Color.blurple())
-        embed.add_field(name="🎶 Music", value="`/play` `/playnext` `/skip` `/pause` `/resume` `/volume`", inline=True)
-        embed.add_field(name="📋 Queue", value="`/queue` `/np` `/shuffle` `/clear` `/repeat`", inline=True)
-        embed.add_field(name="🔧 Control", value="`/summon` `/disconnect`", inline=True)
-        embed.set_footer(text="github.com/Joshwaamein/MusicBot")
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.defer(ephemeral=True)
+        try:
+            commands = bot.tree.get_commands()
+            lines = ["**Available Slash Commands:**\n"]
+            for cmd in sorted(commands, key=lambda c: c.name):
+                desc = cmd.description or "No description"
+                lines.append(f"• `/{cmd.name}` — {desc}")
 
-    log.info("Registered 16 slash commands on bot.tree")
+            text = "\n".join(lines)
+            if len(text) > 2000:
+                text = text[:1997] + "..."
+
+            await interaction.followup.send(text, ephemeral=True)
+
+        except Exception as e:
+            await interaction.followup.send(f"❌ {e}", ephemeral=True)
+
+    log.info(
+        "Registered %d slash commands.",
+        len(bot.tree.get_commands()),
+    )
