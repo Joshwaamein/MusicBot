@@ -11,6 +11,9 @@ Key design decisions:
 """
 
 import logging
+import os
+import re as _re
+import subprocess
 from typing import TYPE_CHECKING, Optional, Union
 
 import discord
@@ -20,6 +23,63 @@ if TYPE_CHECKING:
     from musicbot.bot import MusicBot
 
 log = logging.getLogger(__name__)
+
+
+# ── Input Validation ────────────────────────────────────────────────────────
+MAX_SONG_QUERY_LEN = 500
+MAX_SEARCH_QUERY_LEN = 200
+MAX_URL_LEN = 2000
+SPEED_MIN = 0.5
+SPEED_MAX = 100.0
+SEEK_PATTERN = _re.compile(r"^[+-]?(\d{1,2}:)?\d{1,4}(:\d{2})?$")
+
+
+def _validate_song_input(song: str) -> str:
+    """Validate and sanitize song/URL input."""
+    song = song.strip()
+    if not song:
+        raise ValueError("Song query cannot be empty.")
+    if len(song) > MAX_SONG_QUERY_LEN:
+        raise ValueError(f"Song query too long (max {MAX_SONG_QUERY_LEN} chars).")
+    return song
+
+
+def _validate_url(url: str) -> str:
+    """Validate URL input."""
+    url = url.strip()
+    if not url:
+        raise ValueError("URL cannot be empty.")
+    if len(url) > MAX_URL_LEN:
+        raise ValueError(f"URL too long (max {MAX_URL_LEN} chars).")
+    if not url.startswith(("http://", "https://", "spotify:")):
+        raise ValueError("URL must start with http://, https://, or spotify:")
+    return url
+
+
+def _validate_search_query(query: str) -> str:
+    """Validate search query input."""
+    query = query.strip()
+    if not query:
+        raise ValueError("Search query cannot be empty.")
+    if len(query) > MAX_SEARCH_QUERY_LEN:
+        raise ValueError(f"Search query too long (max {MAX_SEARCH_QUERY_LEN} chars).")
+    return query
+
+
+def _validate_seek_time(time_str: str) -> str:
+    """Validate seek time format."""
+    time_str = time_str.strip()
+    if not SEEK_PATTERN.match(time_str):
+        raise ValueError("Invalid time format. Use e.g. 1:30, 90, +30, -15")
+    return time_str
+
+
+def _validate_speed(rate: float) -> float:
+    """Validate speed rate."""
+    if rate < SPEED_MIN or rate > SPEED_MAX:
+        raise ValueError(f"Speed must be between {SPEED_MIN} and {SPEED_MAX}.")
+    return rate
+
 
 
 class _FakeMessage:
@@ -114,6 +174,7 @@ async def setup(bot: "MusicBot") -> None:
 
         await interaction.response.defer()
         try:
+            song = _validate_song_input(song)
             guild = interaction.guild
             author = interaction.user
             channel = interaction.channel
@@ -159,6 +220,7 @@ async def setup(bot: "MusicBot") -> None:
 
         await interaction.response.defer()
         try:
+            song = _validate_song_input(song)
             guild = interaction.guild
             author = interaction.user
             channel = interaction.channel
@@ -204,6 +266,7 @@ async def setup(bot: "MusicBot") -> None:
 
         await interaction.response.defer()
         try:
+            song = _validate_song_input(song)
             guild = interaction.guild
             author = interaction.user
             channel = interaction.channel
@@ -248,6 +311,7 @@ async def setup(bot: "MusicBot") -> None:
 
         await interaction.response.defer()
         try:
+            song = _validate_song_input(song)
             guild = interaction.guild
             author = interaction.user
             channel = interaction.channel
@@ -654,6 +718,7 @@ async def setup(bot: "MusicBot") -> None:
             # Let _cmd_play handle summoning via cmd_summon
             _player = bot.get_player_in(guild) if guild else None
 
+            query = _validate_search_query(query)
             svc = service.value if service else "youtube"
 
             response = await bot.cmd_search(
@@ -692,6 +757,7 @@ async def setup(bot: "MusicBot") -> None:
                 )
                 return
 
+            time = _validate_seek_time(time)
             response = await bot.cmd_seek(
                 guild=guild,
                 _player=_player,
@@ -725,6 +791,7 @@ async def setup(bot: "MusicBot") -> None:
                 )
                 return
 
+            rate = _validate_speed(rate)
             response = await bot.cmd_speed(
                 guild=guild,
                 player=player,
@@ -763,6 +830,7 @@ async def setup(bot: "MusicBot") -> None:
             # Let _cmd_play handle summoning via cmd_summon
             _player = bot.get_player_in(guild) if guild else None
 
+            url = _validate_url(url)
             response = await bot.cmd_stream(
                 message=fake_msg,
                 _player=_player,
@@ -799,6 +867,95 @@ async def setup(bot: "MusicBot") -> None:
 
         except Exception as e:
             await interaction.followup.send(f"❌ {e}", ephemeral=True)
+
+
+    # ─── /restart ──────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="restart",
+        description="Restart the bot (soft restart by default)",
+    )
+    @app_commands.describe(
+        mode="Restart mode"
+    )
+    @app_commands.choices(
+        mode=[
+            app_commands.Choice(name="Soft (reload config)", value="soft"),
+            app_commands.Choice(name="Full (restart process)", value="full"),
+            app_commands.Choice(name="Upgrade all", value="upgrade"),
+            app_commands.Choice(name="Upgrade pip packages", value="uppip"),
+            app_commands.Choice(name="Upgrade via git", value="upgit"),
+        ]
+    )
+    @app_commands.guild_only()
+    async def slash_restart(
+        interaction: discord.Interaction,
+        mode: Optional[app_commands.Choice[str]] = None,
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+
+        await interaction.response.defer()
+        try:
+            opt = mode.value if mode else "soft"
+            _player = bot.get_player_in(interaction.guild) if interaction.guild else None
+
+            response = await bot.cmd_restart(
+                _player=_player,
+                channel=interaction.channel,
+                opt=opt,
+            )
+            if response:
+                await _send_response(interaction, bot, response, "restart")
+            else:
+                await interaction.followup.send(
+                    f"\U0001f504 Bot is restarting ({opt})...", ephemeral=True
+                )
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /reboot ───────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="reboot",
+        description="Reboot the server (requires confirmation)",
+    )
+    @app_commands.describe(
+        confirm="Type 'yes' to confirm server reboot"
+    )
+    @app_commands.guild_only()
+    async def slash_reboot(
+        interaction: discord.Interaction,
+        confirm: str = "",
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+
+        if confirm.strip().lower() != "yes":
+            await interaction.response.send_message(
+                "\u26a0\ufe0f **Server Reboot**\n"
+                "This will reboot the entire server, not just the bot.\n"
+                "To confirm, use: `/reboot confirm:yes`",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer()
+        try:
+            await interaction.followup.send(
+                "\U0001f504 **Server is rebooting now!** The bot will come back online automatically.",
+            )
+            # Give Discord a moment to send the message
+            import asyncio
+            await asyncio.sleep(2)
+            # Reboot the server
+            subprocess.Popen(["reboot"])
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
 
     log.info(
         "Registered %d slash commands.",

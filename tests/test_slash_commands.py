@@ -40,6 +40,8 @@ EXPECTED_COMMANDS = sorted([
     "speed",
     "stream",
     "help",
+    "reboot",
+    "restart",
 ])
 
 
@@ -92,7 +94,7 @@ class TestSetupRegistration:
         from musicbot.cogs.music import setup
         await setup(bot)
 
-        assert len(tree.get_commands()) == 20
+        assert len(tree.get_commands()) == 22
 
 
 class TestCommandDescriptions:
