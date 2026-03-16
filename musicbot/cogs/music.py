@@ -120,15 +120,8 @@ async def setup(bot: "MusicBot") -> None:
             permissions = bot.permissions.for_user(author)
             fake_msg = _FakeMessage(interaction)
 
+            # Let _cmd_play handle summoning via cmd_summon
             _player = bot.get_player_in(guild) if guild else None
-            if not _player and guild and author.voice:
-                _player = await bot.get_player(author.voice.channel, create=True)
-
-            if not _player:
-                await interaction.followup.send(
-                    "Could not join a voice channel.", ephemeral=True
-                )
-                return
 
             response = await bot._cmd_play(
                 message=fake_msg,
@@ -172,15 +165,8 @@ async def setup(bot: "MusicBot") -> None:
             permissions = bot.permissions.for_user(author)
             fake_msg = _FakeMessage(interaction)
 
+            # Let _cmd_play handle summoning via cmd_summon
             _player = bot.get_player_in(guild) if guild else None
-            if not _player and guild and author.voice:
-                _player = await bot.get_player(author.voice.channel, create=True)
-
-            if not _player:
-                await interaction.followup.send(
-                    "Could not join a voice channel.", ephemeral=True
-                )
-                return
 
             response = await bot._cmd_play(
                 message=fake_msg,
@@ -224,15 +210,8 @@ async def setup(bot: "MusicBot") -> None:
             permissions = bot.permissions.for_user(author)
             fake_msg = _FakeMessage(interaction)
 
+            # Let _cmd_play handle summoning via cmd_summon
             _player = bot.get_player_in(guild) if guild else None
-            if not _player and guild and author.voice:
-                _player = await bot.get_player(author.voice.channel, create=True)
-
-            if not _player:
-                await interaction.followup.send(
-                    "Could not join a voice channel.", ephemeral=True
-                )
-                return
 
             response = await bot.cmd_playnow(
                 message=fake_msg,
@@ -275,15 +254,8 @@ async def setup(bot: "MusicBot") -> None:
             permissions = bot.permissions.for_user(author)
             fake_msg = _FakeMessage(interaction)
 
+            # Let _cmd_play handle summoning via cmd_summon
             _player = bot.get_player_in(guild) if guild else None
-            if not _player and guild and author.voice:
-                _player = await bot.get_player(author.voice.channel, create=True)
-
-            if not _player:
-                await interaction.followup.send(
-                    "Could not join a voice channel.", ephemeral=True
-                )
-                return
 
             response = await bot.cmd_shuffleplay(
                 message=fake_msg,
@@ -679,15 +651,8 @@ async def setup(bot: "MusicBot") -> None:
             permissions = bot.permissions.for_user(author)
             fake_msg = _FakeMessage(interaction)
 
+            # Let _cmd_play handle summoning via cmd_summon
             _player = bot.get_player_in(guild) if guild else None
-            if not _player and guild and author.voice:
-                _player = await bot.get_player(author.voice.channel, create=True)
-
-            if not _player:
-                await interaction.followup.send(
-                    "Could not join a voice channel.", ephemeral=True
-                )
-                return
 
             svc = service.value if service else "youtube"
 
@@ -795,15 +760,8 @@ async def setup(bot: "MusicBot") -> None:
             permissions = bot.permissions.for_user(author)
             fake_msg = _FakeMessage(interaction)
 
+            # Let _cmd_play handle summoning via cmd_summon
             _player = bot.get_player_in(guild) if guild else None
-            if not _player and guild and author.voice:
-                _player = await bot.get_player(author.voice.channel, create=True)
-
-            if not _player:
-                await interaction.followup.send(
-                    "Could not join a voice channel.", ephemeral=True
-                )
-                return
 
             response = await bot.cmd_stream(
                 message=fake_msg,
