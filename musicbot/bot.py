@@ -4050,25 +4050,7 @@ class MusicBot(discord.Client):
         if not player and permissions.summonplay and channel.guild:
             response = await self.cmd_summon(channel.guild, author, message)
             if response:
-                if self.config.embeds:
-                    content = self._gen_embed()
-                    content.title = "summon"
-                    content.description = str(response.content)
-                    await self.safe_send_message(
-                        channel,
-                        content,
-                        expire_in=(
-                            response.delete_after if self.config.delete_messages else 0
-                        ),
-                    )
-                else:
-                    await self.safe_send_message(
-                        channel,
-                        str(response.content),
-                        expire_in=(
-                            response.delete_after if self.config.delete_messages else 0
-                        ),
-                    )
+                # Auto-summon message suppressed (summon during play is silent)
                 player = self.get_player_in(channel.guild)
 
         if not player:
