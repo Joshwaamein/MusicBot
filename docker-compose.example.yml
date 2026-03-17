@@ -1,6 +1,7 @@
 services:
   musicbot:
     build: .
+    restart: unless-stopped
     volumes:
       - ./config:/musicbot/config/
       - ./audio_cache:/musicbot/audio_cache
