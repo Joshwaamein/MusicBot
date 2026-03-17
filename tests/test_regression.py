@@ -214,4 +214,4 @@ class TestNewCommandsRegistered:
 
         await setup(bot)
 
-        assert len(tree.get_commands()) == 49
+        assert len(tree.get_commands()) == 47

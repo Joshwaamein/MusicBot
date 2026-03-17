@@ -1548,44 +1548,6 @@ async def setup(bot: "MusicBot") -> None:
             msg = getattr(e, "message", None) or str(e)
             await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
 
-    # ─── /shutdown ─────────────────────────────────────────────────────────
-
-    @bot.tree.command(
-        name="shutdown",
-        description="Shut down the bot",
-    )
-    @app_commands.checks.has_permissions(administrator=True)
-    @app_commands.guild_only()
-    async def slash_shutdown(interaction: discord.Interaction) -> None:
-        if not isinstance(interaction.user, discord.Member):
-            return
-        await interaction.response.defer()
-        try:
-            await interaction.followup.send("\U0001f6d1 Bot is shutting down...")
-            await bot.cmd_shutdown()
-        except Exception as e:
-            msg = getattr(e, "message", None) or str(e)
-            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
-
-    # ─── /checkupdates ─────────────────────────────────────────────────────
-
-    @bot.tree.command(
-        name="checkupdates",
-        description="Check for bot updates",
-    )
-    @app_commands.checks.has_permissions(administrator=True)
-    @app_commands.guild_only()
-    async def slash_checkupdates(interaction: discord.Interaction) -> None:
-        if not isinstance(interaction.user, discord.Member):
-            return
-        await interaction.response.defer()
-        try:
-            response = await bot.cmd_checkupdates(channel=interaction.channel)
-            await _send_response(interaction, bot, response, "checkupdates")
-        except Exception as e:
-            msg = getattr(e, "message", None) or str(e)
-            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
-
     # ═══════════════════════════════════════════════════════════════════════
     # Phase 6: Info Commands
     # ═══════════════════════════════════════════════════════════════════════

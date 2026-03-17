@@ -821,10 +821,14 @@ def respawn_bot_process() -> None:
         print("Opened a new MusicBot instance. This terminal can be safely closed!")
         sys.exit(0)
     else:
-        # On Unix/Linux/Mac this should immediately replace the current program.
-        # No new PID, and the babies all get thrown out with the bath.  Kinda dangerous...
-        # We need to make sure files and things are closed before we do this.
-        os.execlp(exec_args[0], *exec_args)
+        # When running under systemd, just exit cleanly and let systemd restart us.
+        # os.execlp() would create a rogue process that escapes systemd's control group.
+        if os.environ.get("INVOCATION_ID"):  # systemd sets this env var
+            print("Running under systemd, exiting for systemd to restart...")
+            sys.exit(0)
+        else:
+            # Not under systemd - use the original exec method
+            os.execlp(exec_args[0], *exec_args)
 
 
 def set_console_title() -> None:

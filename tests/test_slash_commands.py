@@ -26,7 +26,6 @@ EXPECTED_COMMANDS = sorted([
     "botlatency",
     "botversion",
     "cache",
-    "checkupdates",
     "clean",
     "clear",
     "config",
@@ -62,7 +61,6 @@ EXPECTED_COMMANDS = sorted([
     "setprefix",
     "shuffle",
     "shuffleplay",
-    "shutdown",
     "skip",
     "speed",
     "stream",
@@ -121,7 +119,7 @@ class TestSetupRegistration:
         from musicbot.cogs.music import setup
         await setup(bot)
 
-        assert len(tree.get_commands()) == 49
+        assert len(tree.get_commands()) == 47
 
 
 class TestCommandDescriptions:
