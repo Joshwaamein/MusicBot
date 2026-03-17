@@ -20,28 +20,55 @@ from conftest import make_mock_bot
 
 # All 20 expected slash command names
 EXPECTED_COMMANDS = sorted([
+    "autoplaylist",
+    "blocksong",
+    "blockuser",
+    "botlatency",
+    "botversion",
+    "cache",
+    "checkupdates",
+    "clean",
+    "clear",
+    "config",
+    "disconnect",
+    "follow",
+    "help",
+    "id",
+    "joinserver",
+    "karaoke",
+    "latency",
+    "leaveserver",
+    "listids",
+    "np",
+    "option",
+    "pause",
+    "perms",
     "play",
     "playnext",
     "playnow",
-    "shuffleplay",
-    "skip",
-    "pause",
-    "resume",
+    "pldump",
     "queue",
-    "np",
-    "volume",
-    "summon",
-    "disconnect",
-    "shuffle",
-    "clear",
+    "reboot",
     "repeat",
+    "resetplaylist",
+    "restart",
+    "resume",
     "search",
     "seek",
+    "setavatar",
+    "setname",
+    "setnick",
+    "setperms",
+    "setprefix",
+    "shuffle",
+    "shuffleplay",
+    "shutdown",
+    "skip",
     "speed",
     "stream",
-    "help",
-    "reboot",
-    "restart",
+    "summon",
+    "uptime",
+    "volume",
 ])
 
 
@@ -94,7 +121,7 @@ class TestSetupRegistration:
         from musicbot.cogs.music import setup
         await setup(bot)
 
-        assert len(tree.get_commands()) == 22
+        assert len(tree.get_commands()) == 49
 
 
 class TestCommandDescriptions:

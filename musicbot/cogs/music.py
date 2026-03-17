@@ -957,6 +957,711 @@ async def setup(bot: "MusicBot") -> None:
             msg = getattr(e, "message", None) or str(e)
             await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
 
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Phase 3: Playlist & Configuration Commands
+    # ═══════════════════════════════════════════════════════════════════════
+
+    # ─── /autoplaylist ─────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="autoplaylist",
+        description="Manage the auto-playlist (add/remove/show songs)",
+    )
+    @app_commands.describe(
+        action="What to do",
+        url="URL of the song (optional, uses current song if empty)",
+    )
+    @app_commands.choices(
+        action=[
+            app_commands.Choice(name="Add song", value="add"),
+            app_commands.Choice(name="Remove song", value="remove"),
+            app_commands.Choice(name="Add entire queue", value="add all"),
+            app_commands.Choice(name="Show playlist", value="show"),
+        ]
+    )
+    @app_commands.guild_only()
+    async def slash_autoplaylist(
+        interaction: discord.Interaction,
+        action: app_commands.Choice[str],
+        url: Optional[str] = None,
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            guild = interaction.guild
+            _player = bot.get_player_in(guild) if guild else None
+            # autoplaylist needs both _player and player params
+            response = await bot.cmd_autoplaylist(
+                guild=guild,
+                author=interaction.user,
+                _player=_player,
+                player=_player,
+                option=action.value,
+                opt_url=url or "",
+            )
+            await _send_response(interaction, bot, response, "autoplaylist")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /resetplaylist ────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="resetplaylist",
+        description="Reset the auto-playlist to the default",
+    )
+    @app_commands.guild_only()
+    async def slash_resetplaylist(interaction: discord.Interaction) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            guild = interaction.guild
+            player = bot.get_player_in(guild)
+            if not player:
+                await interaction.followup.send("Nothing is playing.", ephemeral=True)
+                return
+            response = await bot.cmd_resetplaylist(guild=guild, player=player)
+            await _send_response(interaction, bot, response, "resetplaylist")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /karaoke ──────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="karaoke",
+        description="Toggle karaoke mode",
+    )
+    @app_commands.guild_only()
+    async def slash_karaoke(interaction: discord.Interaction) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            player = bot.get_player_in(interaction.guild)
+            if not player:
+                await interaction.followup.send("Nothing is playing.", ephemeral=True)
+                return
+            response = await bot.cmd_karaoke(player=player)
+            await _send_response(interaction, bot, response, "karaoke")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /follow ───────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="follow",
+        description="Tell the bot to follow a user between voice channels",
+    )
+    @app_commands.describe(user="User to follow (leave empty to stop following)")
+    @app_commands.guild_only()
+    async def slash_follow(
+        interaction: discord.Interaction, user: Optional[discord.Member] = None
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            mentions = [user] if user else []
+            response = await bot.cmd_follow(
+                guild=interaction.guild,
+                author=interaction.user,
+                user_mentions=mentions,
+            )
+            await _send_response(interaction, bot, response, "follow")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /setprefix ────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="setprefix",
+        description="Set a custom command prefix for this server",
+    )
+    @app_commands.describe(prefix="New command prefix")
+    @app_commands.guild_only()
+    async def slash_setprefix(interaction: discord.Interaction, prefix: str) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            response = await bot.cmd_setprefix(guild=interaction.guild, prefix=prefix)
+            await _send_response(interaction, bot, response, "setprefix")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /setnick ──────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="setnick",
+        description="Set the bot\'s nickname on this server",
+    )
+    @app_commands.describe(nick="New nickname (leave empty to reset)")
+    @app_commands.guild_only()
+    async def slash_setnick(
+        interaction: discord.Interaction, nick: Optional[str] = None
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            response = await bot.cmd_setnick(guild=interaction.guild, nick=nick or "")
+            await _send_response(interaction, bot, response, "setnick")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /perms ────────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="perms",
+        description="Show permissions for a user",
+    )
+    @app_commands.describe(user="User to check (leave empty for yourself)")
+    @app_commands.guild_only()
+    async def slash_perms(
+        interaction: discord.Interaction, user: Optional[discord.Member] = None
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            mentions = [user] if user else []
+            permissions = bot.permissions.for_user(interaction.user)
+            response = await bot.cmd_perms(
+                author=interaction.user,
+                channel=interaction.channel,
+                user_mentions=mentions,
+                guild=interaction.guild,
+                permissions=permissions,
+            )
+            await _send_response(interaction, bot, response, "perms")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /id ───────────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="id",
+        description="Show the ID of a user or yourself",
+    )
+    @app_commands.describe(user="User to get ID for")
+    @app_commands.guild_only()
+    async def slash_id(
+        interaction: discord.Interaction, user: Optional[discord.Member] = None
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            mentions = [user] if user else []
+            response = await bot.cmd_id(
+                author=interaction.user,
+                user_mentions=mentions,
+            )
+            await _send_response(interaction, bot, response, "id")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Phase 4: Moderation Commands
+    # ═══════════════════════════════════════════════════════════════════════
+
+    # ─── /blockuser ────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="blockuser",
+        description="Block or unblock a user from using the bot",
+    )
+    @app_commands.describe(
+        action="Add to blocklist, remove from blocklist, or check status",
+        user="The user to block/unblock",
+    )
+    @app_commands.choices(
+        action=[
+            app_commands.Choice(name="Block user", value="add"),
+            app_commands.Choice(name="Unblock user", value="remove"),
+            app_commands.Choice(name="Check status", value="status"),
+        ]
+    )
+    @app_commands.guild_only()
+    async def slash_blockuser(
+        interaction: discord.Interaction,
+        action: app_commands.Choice[str],
+        user: discord.Member,
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            response = await bot.cmd_blockuser(
+                author=interaction.user,
+                user_mentions=[user],
+                option=action.value,
+            )
+            await _send_response(interaction, bot, response, "blockuser")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /blocksong ────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="blocksong",
+        description="Block or unblock a song/URL from being played",
+    )
+    @app_commands.describe(
+        action="Add or remove from blocklist",
+        subject="URL, video ID, or phrase to block",
+    )
+    @app_commands.choices(
+        action=[
+            app_commands.Choice(name="Block", value="add"),
+            app_commands.Choice(name="Unblock", value="remove"),
+        ]
+    )
+    @app_commands.guild_only()
+    async def slash_blocksong(
+        interaction: discord.Interaction,
+        action: app_commands.Choice[str],
+        subject: str,
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            response = await bot.cmd_blocksong(
+                option=action.value,
+                leftover_args=[subject],
+            )
+            await _send_response(interaction, bot, response, "blocksong")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /clean ────────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="clean",
+        description="Clean up bot messages from the channel",
+    )
+    @app_commands.describe(count="Number of messages to search through (default 50)")
+    @app_commands.guild_only()
+    async def slash_clean(
+        interaction: discord.Interaction, count: Optional[int] = None
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            fake_msg = _FakeMessage(interaction)
+            response = await bot.cmd_clean(
+                message=fake_msg,
+                channel=interaction.channel,
+                guild=interaction.guild,
+                author=interaction.user,
+                amount=str(count) if count else "",
+            )
+            await _send_response(interaction, bot, response, "clean")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /pldump ───────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="pldump",
+        description="Dump all URLs from a playlist link",
+    )
+    @app_commands.describe(url="Playlist URL to dump")
+    @app_commands.guild_only()
+    async def slash_pldump(interaction: discord.Interaction, url: str) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            url = _validate_url(url)
+            response = await bot.cmd_pldump(song_url=url)
+            await _send_response(interaction, bot, response, "pldump")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /listids ──────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="listids",
+        description="List server/channel/role/user IDs",
+    )
+    @app_commands.describe(category="What to list IDs for")
+    @app_commands.choices(
+        category=[
+            app_commands.Choice(name="Everything", value="all"),
+            app_commands.Choice(name="Users", value="users"),
+            app_commands.Choice(name="Roles", value="roles"),
+            app_commands.Choice(name="Channels", value="channels"),
+        ]
+    )
+    @app_commands.guild_only()
+    async def slash_listids(
+        interaction: discord.Interaction,
+        category: Optional[app_commands.Choice[str]] = None,
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            cat = category.value if category else "all"
+            response = await bot.cmd_listids(
+                guild=interaction.guild,
+                author=interaction.user,
+                leftover_args=[],
+                cat=cat,
+            )
+            await _send_response(interaction, bot, response, "listids")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Phase 5: Admin Commands (require server Administrator permission)
+    # ═══════════════════════════════════════════════════════════════════════
+
+    # ─── /config ───────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="config",
+        description="View or change bot configuration",
+    )
+    @app_commands.describe(
+        option="Config option to view/change",
+        value="New value (leave empty to view current)",
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guild_only()
+    async def slash_config(
+        interaction: discord.Interaction,
+        option: str,
+        value: Optional[str] = None,
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            args = [value] if value else []
+            response = await bot.cmd_config(
+                user_mentions=[],
+                channel_mentions=[],
+                option=option,
+                leftover_args=args,
+            )
+            await _send_response(interaction, bot, response, "config")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /setperms ─────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="setperms",
+        description="View or change bot permissions groups",
+    )
+    @app_commands.describe(
+        action="Action to perform",
+        args="Additional arguments (group name, permission, value)",
+    )
+    @app_commands.choices(
+        action=[
+            app_commands.Choice(name="List groups", value="list"),
+            app_commands.Choice(name="Show group details", value="show"),
+            app_commands.Choice(name="Set a permission", value="set"),
+        ]
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guild_only()
+    async def slash_setperms(
+        interaction: discord.Interaction,
+        action: Optional[app_commands.Choice[str]] = None,
+        args: Optional[str] = None,
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            opt = action.value if action else "list"
+            leftover = args.split() if args else []
+            response = await bot.cmd_setperms(
+                user_mentions=[],
+                leftover_args=leftover,
+                option=opt,
+            )
+            await _send_response(interaction, bot, response, "setperms")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /option ───────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="option",
+        description="Toggle a bot option on/off",
+    )
+    @app_commands.describe(
+        option="Option name",
+        value="on/off/yes/no",
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guild_only()
+    async def slash_option(
+        interaction: discord.Interaction, option: str, value: str
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            response = await bot.cmd_option(
+                guild=interaction.guild,
+                option=option,
+                value=value,
+            )
+            await _send_response(interaction, bot, response, "option")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /cache ────────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="cache",
+        description="View or manage the audio cache",
+    )
+    @app_commands.describe(action="Cache action")
+    @app_commands.choices(
+        action=[
+            app_commands.Choice(name="Show info", value="info"),
+            app_commands.Choice(name="Update", value="update"),
+            app_commands.Choice(name="Clear cache", value="clear"),
+        ]
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guild_only()
+    async def slash_cache(
+        interaction: discord.Interaction,
+        action: Optional[app_commands.Choice[str]] = None,
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            opt = action.value if action else "info"
+            response = await bot.cmd_cache(opt=opt)
+            await _send_response(interaction, bot, response, "cache")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /setname ──────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="setname",
+        description="Change the bot\'s username",
+    )
+    @app_commands.describe(name="New bot username")
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guild_only()
+    async def slash_setname(interaction: discord.Interaction, name: str) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            response = await bot.cmd_setname(leftover_args=[], name=name)
+            await _send_response(interaction, bot, response, "setname")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /setavatar ────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="setavatar",
+        description="Change the bot\'s avatar",
+    )
+    @app_commands.describe(url="URL of the new avatar image")
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guild_only()
+    async def slash_setavatar(interaction: discord.Interaction, url: str) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            url = _validate_url(url)
+            response = await bot.cmd_setavatar(url=url)
+            await _send_response(interaction, bot, response, "setavatar")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /joinserver ───────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="joinserver",
+        description="Generate an invite link to add the bot to another server",
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guild_only()
+    async def slash_joinserver(interaction: discord.Interaction) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            response = await bot.cmd_joinserver()
+            await _send_response(interaction, bot, response, "joinserver")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /leaveserver ──────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="leaveserver",
+        description="Make the bot leave a server",
+    )
+    @app_commands.describe(server="Server name or ID to leave")
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guild_only()
+    async def slash_leaveserver(interaction: discord.Interaction, server: str) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            response = await bot.cmd_leaveserver(val=server)
+            await _send_response(interaction, bot, response, "leaveserver")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /shutdown ─────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="shutdown",
+        description="Shut down the bot",
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guild_only()
+    async def slash_shutdown(interaction: discord.Interaction) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            await interaction.followup.send("\U0001f6d1 Bot is shutting down...")
+            await bot.cmd_shutdown()
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /checkupdates ─────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="checkupdates",
+        description="Check for bot updates",
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guild_only()
+    async def slash_checkupdates(interaction: discord.Interaction) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            response = await bot.cmd_checkupdates(channel=interaction.channel)
+            await _send_response(interaction, bot, response, "checkupdates")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Phase 6: Info Commands
+    # ═══════════════════════════════════════════════════════════════════════
+
+    # ─── /uptime ───────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="uptime",
+        description="Show how long the bot has been running",
+    )
+    @app_commands.guild_only()
+    async def slash_uptime(interaction: discord.Interaction) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            response = await bot.cmd_uptime()
+            await _send_response(interaction, bot, response, "uptime")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /latency ──────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="latency",
+        description="Show API and voice latency",
+    )
+    @app_commands.guild_only()
+    async def slash_latency(interaction: discord.Interaction) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            response = await bot.cmd_latency(guild=interaction.guild)
+            await _send_response(interaction, bot, response, "latency")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /botlatency ──────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="botlatency",
+        description="Show detailed latency for all voice connections",
+    )
+    @app_commands.guild_only()
+    async def slash_botlatency(interaction: discord.Interaction) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            response = await bot.cmd_botlatency()
+            await _send_response(interaction, bot, response, "botlatency")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ─── /botversion ──────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="botversion",
+        description="Show the current bot version",
+    )
+    @app_commands.guild_only()
+    async def slash_botversion(interaction: discord.Interaction) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer()
+        try:
+            response = await bot.cmd_botversion()
+            await _send_response(interaction, bot, response, "botversion")
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
     log.info(
         "Registered %d slash commands.",
         len(bot.tree.get_commands()),
