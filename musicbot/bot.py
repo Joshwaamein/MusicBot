@@ -7402,7 +7402,7 @@ class MusicBot(discord.Client):
         Prints the current bot version to chat.
         """
         return Response(
-            "https://github.com/Just-Some-Bots/MusicBot\n"
+            "https://github.com/Joshwaamein/MusicBot\n"
             f"Current version:  `{BOTVERSION}`",
             delete_after=30,
         )

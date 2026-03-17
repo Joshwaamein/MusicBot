@@ -113,7 +113,7 @@ class TestSetupRegistration:
         )
 
     @pytest.mark.asyncio
-    async def test_setup_registers_exactly_20_commands(self):
+    async def test_setup_registers_exactly_47_commands(self):
         bot, tree = _make_tree_with_bot()
 
         from musicbot.cogs.music import setup

@@ -11,10 +11,9 @@ Key design decisions:
 """
 
 import logging
-import os
 import re as _re
 import subprocess
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Optional
 
 import discord
 from discord import app_commands
@@ -138,18 +137,6 @@ async def _send_response(
         await interaction.followup.send(str(content))
 
 
-def _check_perms(
-    bot: "MusicBot",
-    interaction: discord.Interaction,
-    perm_name: str,
-) -> bool:
-    """
-    Check if the interaction user has a specific permission.
-    Returns True if allowed, False otherwise.
-    """
-    user = interaction.user
-    perms = bot.permissions.for_user(user)
-    return bool(getattr(perms, perm_name, True))
 
 
 async def setup(bot: "MusicBot") -> None:

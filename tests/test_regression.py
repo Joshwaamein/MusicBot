@@ -198,7 +198,7 @@ class TestNewCommandsRegistered:
         assert "reboot" in cmd_names, f"reboot not found in: {cmd_names}"
 
     @pytest.mark.asyncio
-    async def test_total_commands_is_22(self):
+    async def test_total_commands_is_47(self):
         """We should now have 22 commands (20 original + restart + reboot)."""
         from unittest.mock import MagicMock
         from discord import app_commands
