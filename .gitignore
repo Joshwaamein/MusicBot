@@ -25,3 +25,4 @@ media/
 
 docker-compose.yml
 config/autoplaylist.cachemap.json
+operating-log.txt
