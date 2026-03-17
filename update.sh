@@ -1,4 +1,15 @@
 #!/bin/bash
+# ============================================================================
+# update.sh — MusicBot Linux Updater
+# Joshwaamein/MusicBot (forked from Just-Some-Bots/MusicBot)
+#
+# Usage:   ./update.sh
+#
+# This script:
+#   1. Detects Python version and virtual environment
+#   2. Runs update.py to check for and apply updates via git
+#   3. Upgrades pip dependencies from requirements.txt
+# ============================================================================
 # Assuming no files have been moved, 
 # make sure we're in MusicBot directory...
 cd "$(dirname "${BASH_SOURCE[0]}")" || { echo "Could not change directory to MusicBot."; exit 1; }

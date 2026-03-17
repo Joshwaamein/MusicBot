@@ -1,4 +1,19 @@
 #!/bin/bash
+# ============================================================================
+# install.sh — MusicBot Linux Installer
+# Joshwaamein/MusicBot (forked from Just-Some-Bots/MusicBot)
+#
+# Usage:   ./install.sh [--no-prompt]
+#
+# This script handles full installation:
+#   1. Detects OS and package manager (apt, yum, pacman, etc.)
+#   2. Installs system dependencies (Python, ffmpeg, git, etc.)
+#   3. Creates a Python virtual environment
+#   4. Installs pip dependencies from requirements.txt
+#   5. Runs initial configuration wizard
+#
+# Supports: Ubuntu, Debian, CentOS, Fedora, Arch, macOS, and more
+# ============================================================================
 #
 # MusicBot and this file are provided under an MIT license. 
 # Please see the LICENSE file for details.

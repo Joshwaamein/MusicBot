@@ -1,3 +1,14 @@
+# ============================================================================
+# Dockerfile — MusicBot Docker Image
+# Joshwaamein/MusicBot (forked from Just-Some-Bots/MusicBot)
+#
+# Build:   docker build -t musicbot .
+# Run:     docker run -v ./config:/musicbot/config musicbot
+#
+# Uses Python 3.10-slim with ffmpeg, opus, and sodium for Discord voice.
+# Config, audio cache, data, and logs are persisted via Docker volumes.
+# ============================================================================
+
 FROM python:3.10-slim
 
 # Install system dependencies

@@ -1,4 +1,14 @@
 #!/bin/bash
+# ============================================================================
+# musicbotcmd — MusicBot Service Management Helper
+# Joshwaamein/MusicBot
+#
+# Usage:   ./musicbotcmd <start|stop|restart|logs|startup>
+#
+# Convenience wrapper around systemctl commands for managing the
+# MusicBot systemd service. Requires the musicbot.service to be
+# installed in /etc/systemd/system/
+# ============================================================================
 
 ProgName=$(basename $0)
 

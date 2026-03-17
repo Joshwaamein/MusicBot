@@ -1,4 +1,18 @@
 #!/bin/bash
+# ============================================================================
+# run.sh — MusicBot Linux Launcher
+# Joshwaamein/MusicBot (forked from Just-Some-Bots/MusicBot)
+#
+# Usage:   ./run.sh
+#
+# This script:
+#   1. Changes to the MusicBot directory
+#   2. Activates a Python virtual environment if one exists
+#   3. Finds a compatible Python version (3.8-3.12)
+#   4. Launches run.py with the detected Python
+#
+# For production use, prefer systemd:  systemctl start musicbot
+# ============================================================================
 
 # Assuming no files have been moved, 
 # make sure we're in MusicBot directory...

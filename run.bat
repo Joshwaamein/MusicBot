@@ -1,4 +1,16 @@
 @ECHO off
+REM ============================================================================
+REM run.bat — MusicBot Windows Launcher
+REM Joshwaamein/MusicBot (forked from Just-Some-Bots/MusicBot)
+REM
+REM Usage:   Double-click or run from Command Prompt
+REM
+REM This script:
+REM   1. Sets UTF-8 encoding for console output
+REM   2. Unhides file extensions if hidden (helps avoid config issues)
+REM   3. Detects Python installation (py.exe launcher or PATH)
+REM   4. Launches run.py with Python
+REM ============================================================================
 
 CHCP 65001 > NUL
 CD /d "%~dp0"
