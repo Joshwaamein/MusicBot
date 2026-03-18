@@ -610,14 +610,30 @@ async def setup(bot: "MusicBot") -> None:
 
         await interaction.response.defer()
         try:
-            player = bot.get_player_in(interaction.guild)
+            guild = interaction.guild
+            player = bot.get_player_in(guild)
             if not player:
                 await interaction.followup.send(
                     "Nothing to clear.", ephemeral=True
                 )
                 return
 
+            # Stop radio session if active (prevents auto-refill)
+            radio_was_active = False
+            if guild and guild.id in bot._radio_sessions:
+                del bot._radio_sessions[guild.id]
+                radio_was_active = True
+
             response = await bot.cmd_clear(player=player)
+
+            # Add radio stop notice to the response
+            if radio_was_active:
+                from musicbot.constructs import Response
+                response = Response(
+                    "Cleared the queue and stopped the radio. \U0001f4fb",
+                    delete_after=20,
+                )
+
             await _send_response(interaction, bot, response, "clear")
 
         except Exception as e:
@@ -1255,7 +1271,7 @@ async def setup(bot: "MusicBot") -> None:
                 channel=interaction.channel,
                 guild=interaction.guild,
                 author=interaction.user,
-                amount=str(count) if count else "",
+                search_range_str=str(count) if count else "50",
             )
             await _send_response(interaction, bot, response, "clean")
         except Exception as e:
@@ -1610,6 +1626,223 @@ async def setup(bot: "MusicBot") -> None:
         except Exception as e:
             msg = getattr(e, "message", None) or str(e)
             await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Phase 7: Radio / DJ Commands
+    # ═══════════════════════════════════════════════════════════════════════
+
+    # ─── /radio ────────────────────────────────────────────────────────────
+
+    @bot.tree.command(
+        name="radio",
+        description="Start a Spotify radio station based on a song or artist",
+    )
+    @app_commands.describe(
+        seed="Song name, artist, or Spotify URL to seed the radio",
+        action="Start or stop the radio",
+    )
+    @app_commands.choices(
+        action=[
+            app_commands.Choice(name="Start", value="start"),
+            app_commands.Choice(name="Stop", value="stop"),
+        ]
+    )
+    @app_commands.guild_only()
+    async def slash_radio(
+        interaction: discord.Interaction,
+        seed: Optional[str] = None,
+        action: Optional[app_commands.Choice[str]] = None,
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member):
+            return
+
+        guild = interaction.guild
+        act = action.value if action else "start"
+
+        # ── Handle stop ──
+        if act == "stop":
+            if guild and guild.id in bot._radio_sessions:
+                del bot._radio_sessions[guild.id]
+                # Also clear the queue
+                player = bot.get_player_in(guild)
+                if player:
+                    player.playlist.clear()
+                await interaction.response.send_message(
+                    "\U0001f4fb Radio stopped and queue cleared.", ephemeral=False
+                )
+            else:
+                await interaction.response.send_message(
+                    "No radio is currently playing.", ephemeral=True
+                )
+            return
+
+        # ── Handle start ──
+        if not seed:
+            await interaction.response.send_message(
+                "Please provide a seed song or artist. Example: `/radio seed:Daft Punk - Get Lucky`",
+                ephemeral=True,
+            )
+            return
+
+        if not interaction.user.voice or not interaction.user.voice.channel:
+            await interaction.response.send_message(
+                "You need to be in a voice channel.", ephemeral=True
+            )
+            return
+
+        if not bot.config.spotify_enabled or not bot.spotify:
+            await interaction.response.send_message(
+                "\u274c Spotify is not configured. Radio requires Spotify credentials.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer()
+
+        try:
+            from musicbot.spotify import Spotify
+
+            seed_track_ids = []
+            seed_artist_ids = []
+            seed_track_name = seed
+
+            # Check if seed is a Spotify URL
+            if Spotify.is_url_supported(seed):
+                parts = Spotify.url_to_parts(seed)
+                if parts[1] == "track":
+                    track_obj = await bot.spotify.get_track_object(parts[-1])
+                    seed_track_ids = [track_obj.spotify_id]
+                    seed_track_name = f"{track_obj.artist_name} - {track_obj.name}"
+                    # Also grab artist ID
+                    artists = track_obj.data.get("artists", [])
+                    if artists:
+                        aid = artists[0].get("id")
+                        if aid:
+                            seed_artist_ids = [aid]
+                else:
+                    await interaction.followup.send(
+                        "\u274c Radio only supports track URLs as seeds, not playlists or albums.",
+                        ephemeral=True,
+                    )
+                    return
+            else:
+                # Search Spotify for the seed
+                results = await bot.spotify.search_tracks(seed, limit=1)
+                if not results:
+                    await interaction.followup.send(
+                        f"\u274c Could not find any tracks matching: **{seed}**",
+                        ephemeral=True,
+                    )
+                    return
+                top_track = results[0]
+                seed_track_ids = [top_track.spotify_id]
+                seed_track_name = f"{top_track.artist_name} - {top_track.name}"
+                artists = top_track.data.get("artists", [])
+                if artists:
+                    aid = artists[0].get("id")
+                    if aid:
+                        seed_artist_ids = [aid]
+
+            # Get artist genres for better discovery
+            artist_genres = []
+            if seed_artist_ids:
+                try:
+                    artist_info = await bot.spotify.get_artist_info(seed_artist_ids[0])
+                    artist_genres = artist_info.get("genres", [])
+                except Exception:
+                    pass
+
+            # First, queue the seed song itself
+            author = interaction.user
+            channel = interaction.channel
+            permissions = bot.permissions.for_user(author)
+            fake_msg = _FakeMessage(interaction)
+            _player = bot.get_player_in(guild) if guild else None
+
+            # Play the seed song first
+            try:
+                await bot._cmd_play(
+                    message=fake_msg,
+                    _player=_player,
+                    channel=channel,
+                    guild=guild,
+                    author=author,
+                    permissions=permissions,
+                    leftover_args=[],
+                    song_url=seed,
+                    head=False,
+                )
+                if not _player:
+                    _player = bot.get_player_in(guild)
+            except Exception as e:
+                log.warning("Radio: failed to queue seed song: %s", e)
+
+            # Discover similar tracks using hybrid approach
+            recs = await bot.spotify.discover_tracks_for_radio(
+                artist_ids=seed_artist_ids,
+                artist_name=seed_track_name.split(" - ")[0] if " - " in seed_track_name else seed_track_name,
+                genres=artist_genres,
+                exclude_track_ids=set(seed_track_ids),
+                limit=20,
+            )
+
+            if not recs:
+                await interaction.followup.send(
+                    f"\u274c Could not find similar tracks for: **{seed_track_name}**",
+                    ephemeral=True,
+                )
+                return
+
+            # Store radio session
+            played_ids = set(seed_track_ids)
+            bot._radio_sessions[guild.id] = {
+                "guild_id": guild.id,
+                "seed_track_ids": seed_track_ids,
+                "seed_artist_ids": seed_artist_ids,
+                "artist_name": seed_track_name.split(" - ")[0] if " - " in seed_track_name else seed_track_name,
+                "genres": artist_genres,
+                "channel": interaction.channel,
+                "author": interaction.user,
+                "active": True,
+                "played_track_ids": played_ids,
+            }
+
+            # Send the radio started embed
+            embed = bot._gen_embed()
+            embed.title = "\U0001f4fb Radio Started"
+            embed.description = (
+                f"**Seed:** {seed_track_name}\n"
+                f"**Queuing:** {len(recs)} similar tracks from various artists\n\n"
+                f"Use `/radio action:Stop` to stop the radio."
+            )
+            await interaction.followup.send(embed=embed)
+
+            # Queue all discovered tracks
+            for track in recs:
+                search_query = track.get_track_search_string("ytsearch:{0} {1}")
+                try:
+                    await bot._cmd_play(
+                        message=fake_msg,
+                        _player=_player,
+                        channel=channel,
+                        guild=guild,
+                        author=author,
+                        permissions=permissions,
+                        leftover_args=[],
+                        song_url=search_query,
+                        head=False,
+                    )
+                    played_ids.add(track.spotify_id)
+                    if not _player:
+                        _player = bot.get_player_in(guild)
+                except Exception as e:
+                    log.warning("Radio: failed to queue %s: %s", track.name, e)
+                    continue
+
+        except Exception as e:
+            msg = getattr(e, "message", None) or str(e)
+            await interaction.followup.send(f"\u274c {msg}", ephemeral=True)
+
 
     log.info(
         "Registered %d slash commands.",

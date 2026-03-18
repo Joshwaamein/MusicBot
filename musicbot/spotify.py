@@ -474,6 +474,234 @@ class Spotify:
         """Get a track's info from its Spotify ID"""
         return await self.make_api_req(f"tracks/{track_id}")
 
+    async def search_tracks(self, query: str, limit: int = 5) -> List[SpotifyTrack]:
+        """
+        Search Spotify for tracks matching a query string.
+
+        :param: query:  The search query (song name, artist, etc.)
+        :param: limit:  Maximum number of results to return (1-50)
+        :returns: List of SpotifyTrack objects from search results.
+        """
+        from urllib.parse import quote
+
+        safe_query = quote(query)
+        data = await self.make_api_req(
+            f"search?q={safe_query}&type=track&limit={limit}"
+        )
+        tracks_data = data.get("tracks", {})
+        items = tracks_data.get("items", [])
+        results: List[SpotifyTrack] = []
+        for item in items:
+            try:
+                results.append(SpotifyTrack(item))
+            except (SpotifyError, ValueError):
+                continue
+        return results
+
+    async def get_artist_top_tracks(self, artist_id: str, market: str = "GB") -> List[SpotifyTrack]:
+        """
+        Get an artist's top tracks from Spotify.
+
+        :param: artist_id:  Spotify artist ID.
+        :param: market:  ISO 3166-1 alpha-2 country code for market.
+        :returns: List of SpotifyTrack objects (up to 10).
+        """
+        data = await self.make_api_req(f"artists/{artist_id}/top-tracks?market={market}")
+        tracks_data = data.get("tracks", [])
+        results: List[SpotifyTrack] = []
+        for item in tracks_data:
+            try:
+                results.append(SpotifyTrack(item))
+            except (SpotifyError, ValueError):
+                continue
+        return results
+
+    async def get_artist_albums(self, artist_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Get an artist's albums from Spotify.
+
+        :param: artist_id:  Spotify artist ID.
+        :param: limit:  Maximum number of albums to return.
+        :returns: List of album data dicts.
+        """
+        data = await self.make_api_req(
+            f"artists/{artist_id}/albums?limit={limit}&include_groups=album,single"
+        )
+        return data.get("items", [])
+
+    async def get_album_tracks(self, album_id: str, limit: int = 50) -> List[SpotifyTrack]:
+        """
+        Get tracks from a specific album.
+
+        :param: album_id:  Spotify album ID.
+        :param: limit:  Maximum number of tracks to return.
+        :returns: List of SpotifyTrack objects.
+        """
+        data = await self.make_api_req(f"albums/{album_id}/tracks?limit={limit}")
+        items = data.get("items", [])
+        results: List[SpotifyTrack] = []
+        for item in items:
+            try:
+                # Album track items are SimplifiedTrackObjects (missing 'type' sometimes)
+                if "type" not in item:
+                    item["type"] = "track"
+                results.append(SpotifyTrack(item))
+            except (SpotifyError, ValueError):
+                continue
+        return results
+
+    async def get_artist_info(self, artist_id: str) -> Dict[str, Any]:
+        """Get artist info including genres."""
+        return await self.make_api_req(f"artists/{artist_id}")
+
+    async def search_playlists(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """
+        Search Spotify for playlists matching a query.
+
+        :param: query:  The search query.
+        :param: limit:  Maximum number of results.
+        :returns: List of playlist data dicts.
+        """
+        from urllib.parse import quote
+        safe_query = quote(query)
+        data = await self.make_api_req(f"search?q={safe_query}&type=playlist&limit={limit}")
+        playlists = data.get("playlists", {}).get("items", [])
+        return [p for p in playlists if p is not None]
+
+    async def get_playlist_tracks_simple(self, playlist_id: str, limit: int = 50) -> List[SpotifyTrack]:
+        """
+        Get tracks from a playlist, returned as SpotifyTrack objects.
+
+        :param: playlist_id:  Spotify playlist ID.
+        :param: limit:  Maximum tracks to fetch.
+        :returns: List of SpotifyTrack objects.
+        """
+        data = await self.make_api_req(f"playlists/{playlist_id}/tracks?limit={limit}")
+        items = data.get("items", [])
+        results: List[SpotifyTrack] = []
+        for item in items:
+            track_data = item.get("track")
+            if track_data and track_data.get("type") == "track":
+                try:
+                    results.append(SpotifyTrack(track_data))
+                except (SpotifyError, ValueError):
+                    continue
+        return results
+
+    async def discover_tracks_for_radio(
+        self, artist_ids: List[str], artist_name: str = "",
+        genres: Optional[List[str]] = None,
+        exclude_track_ids: Optional[set] = None, limit: int = 20
+    ) -> List[SpotifyTrack]:
+        """
+        Discover tracks for radio mode using a hybrid approach:
+        1. Search for curated "{artist} radio" playlists
+        2. Supplement with genre-based track search
+        3. Fall back to artist top tracks + album tracks
+
+        :param: artist_ids:  List of Spotify artist IDs.
+        :param: artist_name:  Name of the seed artist (for playlist search).
+        :param: genres:  List of genre strings from the artist.
+        :param: exclude_track_ids:  Set of track IDs to exclude.
+        :param: limit:  Approximate number of tracks to return.
+        :returns: List of SpotifyTrack objects for radio playback.
+        """
+        import random
+        from urllib.parse import quote
+
+        exclude = exclude_track_ids or set()
+        all_tracks: List[SpotifyTrack] = []
+
+        # Strategy 1: Find a curated radio playlist for this artist
+        if artist_name:
+            try:
+                playlists = await self.search_playlists(f"{artist_name} radio", limit=5)
+                # Pick the best playlist (prefer ones with "radio" in name and reasonable size)
+                best_playlist = None
+                for pl in playlists:
+                    name_lower = pl.get("name", "").lower()
+                    total = pl.get("tracks", {}).get("total", 0)
+                    if ("radio" in name_lower or "mix" in name_lower) and 10 < total < 200:
+                        best_playlist = pl
+                        break
+                if not best_playlist and playlists:
+                    # Just use the first result if nothing matches perfectly
+                    for pl in playlists:
+                        total = pl.get("tracks", {}).get("total", 0)
+                        if total > 5:
+                            best_playlist = pl
+                            break
+
+                if best_playlist:
+                    pl_id = best_playlist["id"]
+                    pl_name = best_playlist.get("name", "Unknown")
+                    log.info("Radio: Using playlist '%s' for discovery", pl_name)
+                    pl_tracks = await self.get_playlist_tracks_simple(pl_id, limit=50)
+                    for t in pl_tracks:
+                        if t.spotify_id not in exclude:
+                            all_tracks.append(t)
+            except SpotifyError as e:
+                log.warning("Radio: Playlist search failed: %s", e)
+
+        # Strategy 2: Genre-based search for cross-artist variety
+        if genres and len(all_tracks) < limit:
+            try:
+                for genre in genres[:2]:
+                    safe_genre = quote(f"genre:{genre}")
+                    data = await self.make_api_req(f"search?q={safe_genre}&type=track&limit=10")
+                    items = data.get("tracks", {}).get("items", [])
+                    for item in items:
+                        try:
+                            t = SpotifyTrack(item)
+                            if t.spotify_id not in exclude:
+                                all_tracks.append(t)
+                        except (SpotifyError, ValueError):
+                            continue
+            except SpotifyError as e:
+                log.warning("Radio: Genre search failed: %s", e)
+
+        # Strategy 3: Fall back to artist top tracks + albums
+        if len(all_tracks) < limit:
+            for artist_id in artist_ids[:2]:
+                try:
+                    top_tracks = await self.get_artist_top_tracks(artist_id)
+                    for t in top_tracks:
+                        if t.spotify_id not in exclude:
+                            all_tracks.append(t)
+                except SpotifyError:
+                    continue
+
+                if len(all_tracks) < limit:
+                    try:
+                        albums = await self.get_artist_albums(artist_id, limit=3)
+                        if albums:
+                            selected = random.sample(albums, min(2, len(albums)))
+                            for album in selected:
+                                aid = album.get("id")
+                                if aid:
+                                    try:
+                                        atracks = await self.get_album_tracks(aid)
+                                        for t in atracks:
+                                            if t.spotify_id not in exclude:
+                                                all_tracks.append(t)
+                                    except SpotifyError:
+                                        continue
+                    except SpotifyError:
+                        continue
+
+        # Deduplicate by track ID
+        seen = set()
+        unique_tracks = []
+        for t in all_tracks:
+            if t.spotify_id not in seen:
+                seen.add(t.spotify_id)
+                unique_tracks.append(t)
+
+        # Shuffle and limit
+        random.shuffle(unique_tracks)
+        return unique_tracks[:limit]
+
+
     async def get_album_object_complete(self, album_id: str) -> SpotifyAlbum:
         """Fetch a playlist and all its tracks from Spotify API, returned as a SpotifyAlbum object."""
         aldata = await self.get_album(album_id)

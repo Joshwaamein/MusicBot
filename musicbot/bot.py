@@ -196,6 +196,7 @@ class MusicBot(discord.Client):
         )
 
         self.spotify: Optional[Spotify] = None
+        self._radio_sessions: Dict[int, Dict[str, Any]] = {}  # per-guild radio state
         self.session: Optional[aiohttp.ClientSession] = None
 
         intents = discord.Intents.all()
@@ -1255,6 +1256,110 @@ class MusicBot(discord.Client):
             self.handle_player_inactivity(player), name="MB_HandleInactivePlayer"
         )
 
+    async def _radio_refill(self, player: "MusicPlayer", guild: "discord.Guild") -> None:
+        """
+        Fetch more recommendations from Spotify and queue them when radio is active.
+        Called from on_player_finished_playing when the queue is running low.
+        """
+        session = self._radio_sessions.get(guild.id)
+        if not session or not session.get("active"):
+            return
+
+        if not self.spotify or not self.config.spotify_enabled:
+            return
+
+        try:
+            seed_tracks = session.get("seed_track_ids", [])
+            seed_artists = session.get("seed_artist_ids", [])
+            played = session.get("played_track_ids", set())
+
+            # Discover tracks using hybrid approach (playlists + genre search + artist tracks)
+            artist_name = session.get("artist_name", "")
+            genres = session.get("genres", [])
+            recs = await self.spotify.discover_tracks_for_radio(
+                artist_ids=seed_artists[:3] if seed_artists else [],
+                artist_name=artist_name,
+                genres=genres,
+                exclude_track_ids=played,
+                limit=20,
+            )
+
+            # Filter out already-played tracks
+            new_tracks = [t for t in recs if t.spotify_id not in played]
+            if not new_tracks:
+                # If all filtered out, clear history and try again
+                session["played_track_ids"] = set()
+                new_tracks = recs
+
+            channel = session.get("channel")
+            author = session.get("author")
+            if not channel or not author:
+                return
+
+            permissions = self.permissions.for_user(author)
+
+            queued = 0
+            for track in new_tracks[:15]:
+                search_query = track.get_track_search_string("ytsearch:{0} {1}")
+                try:
+                    # Create a minimal fake message for _cmd_play
+                    class _RadioFakeMsg:
+                        def __init__(self, author, channel, guild):
+                            self.id = 0
+                            self.author = author
+                            self.channel = channel
+                            self.guild = guild
+                            self.content = ""
+                            self.mentions = []
+                            self.raw_mentions = []
+                            self.raw_channel_mentions = []
+                        async def delete(self, **kw):
+                            pass
+                        async def add_reaction(self, e):
+                            pass
+
+                    fake_msg = _RadioFakeMsg(author, channel, guild)
+                    await self._cmd_play(
+                        message=fake_msg,
+                        _player=player,
+                        channel=channel,
+                        guild=guild,
+                        author=author,
+                        permissions=permissions,
+                        leftover_args=[],
+                        song_url=search_query,
+                        head=False,
+                    )
+                    played.add(track.spotify_id)
+                    queued += 1
+                except Exception as e:
+                    log.warning("Radio refill: failed to queue track %s: %s", track.name, e)
+                    continue
+
+            session["played_track_ids"] = played
+
+            # Rotate seeds if we've played a lot of tracks
+            if len(played) > 100 and new_tracks:
+                # Use some of the new tracks as seeds for variety
+                new_seed_ids = [t.spotify_id for t in new_tracks[:3]]
+                artist_ids = []
+                for t in new_tracks[:3]:
+                    artists = t.data.get("artists", [])
+                    if artists:
+                        aid = artists[0].get("id")
+                        if aid:
+                            artist_ids.append(aid)
+                session["seed_track_ids"] = new_seed_ids
+                if artist_ids:
+                    session["seed_artist_ids"] = artist_ids
+
+            if queued > 0:
+                log.info("Radio refill: queued %d tracks for guild %s", queued, guild.name)
+
+        except Exception as e:
+            log.warning("Radio refill failed for guild %s: %s", guild.name, e)
+
+
     async def on_player_finished_playing(self, player: MusicPlayer, **_: Any) -> None:
         """
         Event called by MusicPlayer when playback has finished without error.
@@ -1285,6 +1390,12 @@ class MusicBot(discord.Client):
                 "VoiceClient says it is not connected, nothing else we can do here."
             )
             return
+
+        # ── Radio auto-refill: queue more songs when running low ──
+        if guild.id in self._radio_sessions:
+            radio_session = self._radio_sessions[guild.id]
+            if radio_session.get("active") and len(player.playlist.entries) <= 3:
+                await self._radio_refill(player, guild)
 
         if self.config.leave_after_queue_empty:
             guild = player.voice_client.guild
