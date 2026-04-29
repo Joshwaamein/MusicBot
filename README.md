@@ -104,7 +104,7 @@ All commands use Discord's native **slash command** system. Type `/` in any chan
 | `/search <query>` | Search for a song and choose from results |
 | `/pause` | Pause the current song |
 | `/resume` | Resume playback |
-| `/skip` | Skip the current song |
+| `/skip [force:True]` | Skip the current song; `force:True` bypasses vote-skip (owner/instaskip only) |
 | `/seek <time>` | Seek to a position (e.g. `1:30`, `+30`, `-15`) |
 | `/speed <rate>` | Set playback speed (e.g. `0.5`, `1.0`, `2.0`) |
 | `/volume [level]` | Set or show the playback volume (1–100) |
@@ -165,11 +165,11 @@ All commands use Discord's native **slash command** system. Type `/` in any chan
 | `/perms [user]` | Show permissions for a user |
 | `/id [user]` | Show the ID of a user or yourself |
 | `/listids [category]` | List server/channel/role/user IDs |
-| `/restart [mode]` | Restart the bot (soft, full, upgrade) |
+| `/restart [mode]` | Restart the bot — modes: `soft` (reload config), `full` (restart process), `upgrade` (all), `uppip` (pip packages only), `upgit` (git pull only) |
 | `/reboot confirm:yes` | Reboot the server (requires confirmation) |
 | `/joinserver` | Generate an invite link to add the bot to another server |
 | `/leaveserver <server>` | Make the bot leave a server |
-| `/cache [action]` | View or manage the audio cache |
+| `/cache [action]` | Manage the audio cache — actions: `info` (show stats), `update` (rebuild), `clear` (delete cached files). Requires server admin. |
 
 ---
 
