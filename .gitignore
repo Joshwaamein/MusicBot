@@ -26,3 +26,7 @@ media/
 docker-compose.yml
 config/autoplaylist.cachemap.json
 operating-log.txt
+
+# Local-only: deploy keys, ad-hoc dev/patch scripts
+keys/
+dev-scripts/
